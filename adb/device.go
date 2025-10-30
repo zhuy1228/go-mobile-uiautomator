@@ -111,69 +111,6 @@ func parseDevicesPayload(payload string) []DeviceInfo {
 	return out
 }
 
-// getPropExecOut: 通过 exec-out:getprop 一次性获取设备所有 getprop 输出（返回原始字节）
-func getPropExecOut(addr, serial string, timeout time.Duration) ([]byte, error) {
-	// open a connection and switch transport for this connection
-	conn, err := DialADB(addr, timeout)
-	if err != nil {
-		return nil, err
-	}
-	// ensure close
-	defer conn.Close()
-
-	// transport
-	if err := WriteAdbCmd(conn, "host:transport:"+serial); err != nil {
-		return nil, err
-	}
-	status, err := ReadStatus(conn)
-	if err != nil {
-		return nil, err
-	}
-	if status == "FAIL" {
-		msg, _ := ReadLenFrame(conn)
-		return nil, fmt.Errorf("transport FAIL: %s", string(msg))
-	}
-	if status != "OKAY" {
-		return nil, fmt.Errorf("unexpected transport status: %s", status)
-	}
-
-	// send exec-out:getprop
-	if err := WriteAdbCmd(conn, "exec-out:getprop"); err != nil {
-		return nil, err
-	}
-	status, err = ReadStatus(conn)
-	if err != nil {
-		return nil, err
-	}
-	if status == "FAIL" {
-		msg, _ := ReadLenFrame(conn)
-		return nil, fmt.Errorf("exec-out FAIL: %s", string(msg))
-	}
-	if status != "OKAY" {
-		return nil, fmt.Errorf("unexpected exec-out status: %s", status)
-	}
-
-	// read frames until timeout/EOF and concatenate
-	var b []byte
-	for {
-		data, err := ReadLenFrame(conn)
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				break
-			}
-			if err == io.EOF {
-				break
-			}
-			return nil, err
-		}
-		if len(data) == 0 {
-			break
-		}
-		b = append(b, data...)
-	}
-	return b, nil
-}
-
 // parseGetprop parses getprop output "key]: [value" lines into map
 func parseGetprop(raw []byte) map[string]string {
 	m := map[string]string{}
@@ -201,35 +138,6 @@ func parseGetprop(raw []byte) map[string]string {
 		}
 	}
 	return m
-}
-
-// CollectAllDevices gathers DeviceInfo for all devices listed by adb server
-func CollectAllDevices(addr string, timeout time.Duration) ([]DeviceInfo, error) {
-	raw, err := listDevicesRaw(addr, timeout)
-	if err != nil {
-		return nil, err
-	}
-	devs := parseDevicesPayload(raw)
-	if len(devs) == 0 {
-		return devs, nil
-	}
-
-	// For each device, fetch getprop via exec-out (sequential; can be parallelized)
-	for i := range devs {
-		serial := devs[i].Serial
-		rawProps, err := getPropExecOut(addr, serial, timeout)
-		if err != nil {
-			// record error in Props under special key
-			devs[i].Props["__getprop_error"] = err.Error()
-			continue
-		}
-		props := parseGetprop(rawProps)
-		// merge into existing short props (from devices -l)
-		for k, v := range props {
-			devs[i].Props[k] = v
-		}
-	}
-	return devs, nil
 }
 
 func parseDevicesMap(payload string) (map[string]string, []string) {
@@ -292,7 +200,7 @@ func FindSerialByProduct(addr, targetProduct string) (string, error) {
 		if err := TransportTo(conn, serial); err != nil {
 			continue
 		}
-		out, err := ExecOut(conn, "getprop ro.product.model")
+		out, err := ExecShell(conn, "getprop ro.product.model")
 		if err == nil {
 			if strings.TrimSpace(string(out)) == targetProduct {
 				return serial, nil

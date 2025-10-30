@@ -60,41 +60,6 @@ func ReadLenFrame(conn net.Conn) ([]byte, error) {
 	return readN(conn, int(l), 10*time.Second)
 }
 
-func ExecOut(conn net.Conn, cmd string) ([]byte, error) {
-	if err := WriteAdbCmd(conn, "exec-out:"+cmd); err != nil {
-		return nil, err
-	}
-	status, err := ReadStatus(conn)
-	if err != nil {
-		return nil, err
-	}
-	if status == "FAIL" {
-		msg, _ := ReadLenFrame(conn)
-		return nil, fmt.Errorf("exec-out FAIL: %s", string(msg))
-	}
-	if status != "OKAY" {
-		return nil, fmt.Errorf("unexpected exec-out status: %s", status)
-	}
-	var out []byte
-	for {
-		data, err := ReadLenFrame(conn)
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				break
-			}
-			if err == io.EOF {
-				break
-			}
-			return nil, err
-		}
-		if len(data) == 0 {
-			break
-		}
-		out = append(out, data...)
-	}
-	return out, nil
-}
-
 // transportTo: 指示 adb server 将后续请求路由到指定 serial
 func TransportTo(conn net.Conn, serial string) error {
 	if err := WriteAdbCmd(conn, "host:transport:"+serial); err != nil {
@@ -150,21 +115,7 @@ func ExecShell(conn net.Conn, shellCmd string) ([]byte, error) {
 
 // readResponse reads a 4-byte response like OKAY/FAIL and returns it and optional message (for FAIL)
 func ReadResponse(conn net.Conn, debug bool) (string, []byte, error) {
-	readN := func(n int) ([]byte, error) {
-		buf := make([]byte, n)
-		total := 0
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		for total < n {
-			nr, err := conn.Read(buf[total:])
-			if err != nil {
-				return nil, err
-			}
-			total += nr
-		}
-		return buf, nil
-	}
-
-	stb, err := readN(4)
+	stb, err := readN(conn, 4, 10*time.Second)
 	if err != nil {
 		return "", nil, err
 	}
@@ -177,7 +128,7 @@ func ReadResponse(conn net.Conn, debug bool) (string, []byte, error) {
 	}
 	if st == "FAIL" {
 		// read next 4 bytes (may be little-endian uint32 length or ASCII hex)
-		hdr, err := readN(4)
+		hdr, err := readN(conn, 4, 10*time.Second)
 		if err != nil {
 			if debug {
 				fmt.Fprintf(os.Stderr, "ReadResponseFixed: no length header after FAIL: %v\n", err)
@@ -191,7 +142,7 @@ func ReadResponse(conn net.Conn, debug bool) (string, []byte, error) {
 		// try little-endian uint32 first
 		l := int(binary.LittleEndian.Uint32(hdr))
 		if l > 0 {
-			msg, err := readN(l)
+			msg, err := readN(conn, l, 10*time.Second)
 			if err != nil {
 				if debug {
 					fmt.Fprintf(os.Stderr, "ReadResponseFixed: failed to read %d bytes message: %v\n", l, err)
@@ -206,7 +157,7 @@ func ReadResponse(conn net.Conn, debug bool) (string, []byte, error) {
 
 		// fallback: try ASCII-hex parse (backwards compatibility)
 		if n, perr := strconv.ParseInt(string(hdr), 16, 32); perr == nil && n > 0 {
-			msg, err := readN(int(n))
+			msg, err := readN(conn, int(n), 10*time.Second)
 			if err != nil {
 				if debug {
 					fmt.Fprintf(os.Stderr, "ReadResponseFixed: failed to read ascii-hex message of len %d: %v\n", n, err)
