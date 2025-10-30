@@ -7,6 +7,11 @@ import (
 )
 
 func main() {
+
+}
+
+// 文件推送验证
+func FilePush() {
 	// edit these for your environment
 	addr := "127.0.0.1:5037"
 	local := "C:/Users/01/Desktop/aaa.PNG"
