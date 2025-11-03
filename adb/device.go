@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -209,3 +210,88 @@ func FindSerialByProduct(addr, targetProduct string) (string, error) {
 	}
 	return "", fmt.Errorf("no device with product=%s found", targetProduct)
 }
+
+func InstallApkOnDevice(conn net.Conn, serial, localApkPath string, pmArgs string, debug bool) (string, error) {
+	// 1. 准备远端临时路径
+	base := filepath.Base(localApkPath)
+	remoteTmp := "/data/local/tmp/" + base
+	if pmArgs == "" {
+		pmArgs = "-r"
+	}
+
+	// 执行 shell: pm install ...
+	// 使用 exec shell（非 interactive）通过 "shell:<cmd>"
+	installCmd := "pm install " + pmArgs + " " + remoteTmp
+	if debug {
+		fmt.Printf("[DEBUG] running shell command: %s\n", installCmd)
+	}
+	outBuf, err := ExecShell(conn, "shell:"+installCmd)
+
+	if err != nil {
+		return "", err
+	}
+
+	outStr := string(outBuf)
+	if debug {
+		fmt.Printf("[DEBUG] pm install output:\n%s\n", outStr)
+	}
+
+	// 4. 删除临时文件（best-effort）
+	_ = WriteAdbCmd(conn, "host:transport:"+serial)
+	_, _ = readN(conn, 4, 10*time.Second)
+	_ = WriteAdbCmd(conn, "shell:rm -f "+remoteTmp)
+	// read and discard
+	_, _ = readN(conn, 4, 10*time.Second)
+
+	// 5. 根据 pm 输出判断成功（pm install 成功通常包含 "Success"）
+	if containsSuccess(outStr) {
+		return outStr, nil
+	}
+	return outStr, fmt.Errorf("install failed: %s", outStr)
+}
+
+func containsSuccess(s string) bool {
+	// 简单判断：忽略大小写包含 "success"
+	return (len(s) > 0) && (stringContainsFold(s, "success"))
+}
+
+func stringContainsFold(s, sub string) bool {
+	// 不依赖 strings 包的 ToLower 性能差别，这里直接用标准方法
+	return (len(s) >= len(sub)) && (IndexFold(s, sub) >= 0)
+}
+
+func IndexFold(s, sub string) int {
+	// 直接使用 strings 包实现（为了清晰，这里直接调用）
+	return indexFoldUsingStrings(s, sub)
+}
+
+func indexFoldUsingStrings(s, sub string) int {
+	// 实际工程里直接用 strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+	// 但为了最小示例，这里直接实现：
+	// 换成标准库实现：
+	//
+	// 注意：下面两行才是简洁实现
+	//
+	// import "strings"
+	// return strings.Index(strings.ToLower(s), strings.ToLower(sub))
+	//
+	// 这里我们直接调用：
+	return stringsIndexFold(s, sub)
+}
+
+func stringsIndexFold(s, sub string) int {
+	// 调用标准库
+	// 把此函数简单实现为：
+	// strings.Index(strings.ToLower(s), strings.ToLower(sub))
+	// 以便示例完整可运行
+	// 这里需要引入 strings 包
+	// 为了保持示例简洁，我在文件顶部添加下面两行导入：
+	//
+	// "strings"
+	//
+	// 然后直接实现：
+	return stringsIndex(stringsToLower(s), stringsToLower(sub))
+}
+
+func stringsToLower(s string) string { return strings.ToLower(s) }
+func stringsIndex(a, b string) int   { return strings.Index(a, b) }
