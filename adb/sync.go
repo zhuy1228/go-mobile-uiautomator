@@ -39,23 +39,7 @@ func (s *Sync) SyncPushFile(localPath, remotePath string, mode int, debug bool) 
 	if debug {
 		fmt.Printf("[DEBUG] local filesize=%d\n", fi.Size())
 	}
-
-	// 打开 sync
-	if err := WriteAdbCmd(s.Conn, "sync:"); err != nil {
-		return 0, err
-	}
-	tok, err := readN(s.Conn, 4, 10*time.Second)
-	if err != nil {
-		return 0, err
-	}
-	if string(tok) != "OKAY" {
-		_, msg, _ := ReadResponse(s.Conn, true)
-		if len(msg) > 0 {
-			return 0, fmt.Errorf("sync open failed: %s", string(msg))
-		}
-		return 0, fmt.Errorf("sync open failed: %q", string(tok))
-	}
-
+	s.StartSync()
 	// 构造 SEND payload
 	modeStr := strconv.Itoa(syscall.S_IFREG | mode)
 	sendPayload := []byte(remotePath + "," + modeStr)
@@ -102,7 +86,8 @@ func (s *Sync) SyncPushFile(localPath, remotePath string, mode int, debug bool) 
 	// 发送 DONE
 	done := make([]byte, 8)
 	copy(done[:4], []byte("DONE"))
-	binary.LittleEndian.PutUint32(done[4:], uint32(time.Now().Unix()))
+	mtime := uint32(fi.ModTime().Unix())
+	binary.LittleEndian.PutUint32(done[4:], mtime)
 	if _, err := s.Conn.Write(done); err != nil {
 		return total, err
 	}
@@ -111,7 +96,7 @@ func (s *Sync) SyncPushFile(localPath, remotePath string, mode int, debug bool) 
 	}
 
 	// 读取最终响应
-	resp, msg, err := ReadResponse(s.Conn, true)
+	resp, msg, err := ReadSyncStatus(s.Conn)
 	if err != nil {
 		return total, err
 	}
@@ -122,4 +107,48 @@ func (s *Sync) SyncPushFile(localPath, remotePath string, mode int, debug bool) 
 		return total, fmt.Errorf("sync failed: %s", resp)
 	}
 	return total, nil
+}
+
+func (s *Sync) StartSync() error {
+	if err := WriteAdbCmd(s.Conn, "sync:"); err != nil {
+		return err
+	}
+	tok, err := readN(s.Conn, 4, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	if string(tok) != "OKAY" {
+		_, msg, _ := ReadSyncStatus(s.Conn)
+		if len(msg) > 0 {
+			return fmt.Errorf("sync open failed: %s", string(msg))
+		}
+		return fmt.Errorf("sync open failed: %q", string(tok))
+	}
+	return nil
+}
+
+func ReadSyncStatus(r io.Reader) (string, string, error) {
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(r, hdr); err != nil {
+		return "", "", err
+	}
+	status := string(hdr)
+	switch status {
+	case "OKAY":
+		return "OKAY", "", nil
+	case "FAIL":
+		lenBuf := make([]byte, 4)
+		if _, err := io.ReadFull(r, lenBuf); err != nil {
+			return "FAIL", "", err
+		}
+		l := binary.LittleEndian.Uint32(lenBuf)
+		msg := make([]byte, l)
+		if _, err := io.ReadFull(r, msg); err != nil {
+			return "FAIL", "", err
+		}
+		return "FAIL", string(msg), nil
+	default:
+		// 非预期状态，直接返回原始字符串，便于上层报错
+		return status, "", nil
+	}
 }
