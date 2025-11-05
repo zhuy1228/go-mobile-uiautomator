@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -22,8 +21,8 @@ type DeviceInfo struct {
 	Props       map[string]string
 }
 
-// listDevicesRaw: 请求 host:devices 并返回原始 payload
-func listDevicesRaw(addr string, timeout time.Duration) (string, error) {
+// ListDevicesRaw: 请求 host:devices 并返回原始 payload
+func ListDevicesRaw(addr string, timeout time.Duration) (string, error) {
 	conn, err := DialADB(addr, timeout)
 	if err != nil {
 		return "", err
@@ -67,8 +66,8 @@ func listDevicesRaw(addr string, timeout time.Duration) (string, error) {
 	return strings.Join(parts, ""), nil
 }
 
-// parseDevicesPayload: 解析 host:devices 返回的 payload，提取可能的 product/model/device/transport_id
-func parseDevicesPayload(payload string) []DeviceInfo {
+// ParseDevicesPayload: 解析 host:devices 返回的 payload，提取可能的 product/model/device/transport_id
+func ParseDevicesPayload(payload string) []DeviceInfo {
 	out := []DeviceInfo{}
 	lines := strings.Split(payload, "\n")
 	for _, ln := range lines {
@@ -141,7 +140,7 @@ func parseGetprop(raw []byte) map[string]string {
 	return m
 }
 
-func parseDevicesMap(payload string) (map[string]string, []string) {
+func ParseDevicesMap(payload string) (map[string]string, []string) {
 	m := make(map[string]string)
 	lines := strings.Split(payload, "\n")
 	for _, ln := range lines {
@@ -168,18 +167,18 @@ func parseDevicesMap(payload string) (map[string]string, []string) {
 
 // Find device serial by product value and return serial (first match)
 func FindSerialByProduct(addr, targetProduct string) (string, error) {
-	payload, err := listDevicesRaw(addr, 3*time.Second)
+	payload, err := ListDevicesRaw(addr, 3*time.Second)
 	if err != nil {
 		return "", err
 	}
-	m, _ := parseDevicesMap(payload)
+	m, _ := ParseDevicesMap(payload)
 	for serial, product := range m {
 		if product == targetProduct {
 			return serial, nil
 		}
 	}
 	// fallback: if no product fields in devices-l, try per-device getprop
-	payloadBasic, _ := listDevicesRaw(addr, 3*time.Second) // reuse; could be host:devices if preferred
+	payloadBasic, _ := ListDevicesRaw(addr, 3*time.Second) // reuse; could be host:devices if preferred
 	lines := strings.Split(payloadBasic, "\n")
 	for _, ln := range lines {
 		ln = strings.TrimSpace(ln)
@@ -211,10 +210,16 @@ func FindSerialByProduct(addr, targetProduct string) (string, error) {
 	return "", fmt.Errorf("no device with product=%s found", targetProduct)
 }
 
-func InstallApkOnDevice(conn net.Conn, serial, localApkPath string, pmArgs string, debug bool) (string, error) {
+// 安装APK到设备
+func InstallApkOnDevice(addr, serial string, remoteTmp string, pmArgs string, debug bool) (string, error) {
+	conn, err := DialADB(addr, 15*time.Second)
+	if err != nil {
+		fmt.Println("dial error:", err)
+		return "", err
+	}
+	defer conn.Close()
+	TransportTo(conn, serial)
 	// 1. 准备远端临时路径
-	base := filepath.Base(localApkPath)
-	remoteTmp := "/data/local/tmp/" + base
 	if pmArgs == "" {
 		pmArgs = "-r"
 	}
@@ -225,9 +230,10 @@ func InstallApkOnDevice(conn net.Conn, serial, localApkPath string, pmArgs strin
 	if debug {
 		fmt.Printf("[DEBUG] running shell command: %s\n", installCmd)
 	}
-	outBuf, err := ExecShell(conn, "shell:"+installCmd)
+	outBuf, err := ExecShell(conn, installCmd)
 
 	if err != nil {
+		log.Println("[ERROR] ", err)
 		return "", err
 	}
 
@@ -236,13 +242,7 @@ func InstallApkOnDevice(conn net.Conn, serial, localApkPath string, pmArgs strin
 		fmt.Printf("[DEBUG] pm install output:\n%s\n", outStr)
 	}
 
-	// 4. 删除临时文件（best-effort）
-	_ = WriteAdbCmd(conn, "host:transport:"+serial)
-	_, _ = readN(conn, 4, 10*time.Second)
-	_ = WriteAdbCmd(conn, "shell:rm -f "+remoteTmp)
-	// read and discard
-	_, _ = readN(conn, 4, 10*time.Second)
-
+	ExecShell(conn, "rm -f "+remoteTmp)
 	// 5. 根据 pm 输出判断成功（pm install 成功通常包含 "Success"）
 	if containsSuccess(outStr) {
 		return outStr, nil
