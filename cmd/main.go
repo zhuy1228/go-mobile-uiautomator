@@ -1,13 +1,32 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"go-mobile-uiautomator/adb"
+	"go-mobile-uiautomator/services"
 	"time"
 )
 
 func main() {
 
+}
+
+// 文件推送加安装
+func FilePushInstall() {
+	addr := "127.0.0.1:5037"
+	// local := "./assets/app-uiautomator.apk"
+	// remote := "/sdcard/app-uiautomator.apk"
+	// mode := 0644
+	serial := "emulator-5556"
+	payload, _ := adb.ListDevicesRaw(addr, 15*time.Second)
+	m := adb.ParseDevicesPayload(payload)
+	b2, _ := json.MarshalIndent(m, "", "  ")
+	fmt.Println(string(b2))
+
+	services.InstallServiceJar(addr, serial)
+
+	services.InstallServiceApk(addr, serial)
 }
 
 // 文件推送验证
