@@ -8,10 +8,15 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
+var mu sync.Mutex
+
 func DialADB(addr string, timeout time.Duration) (net.Conn, error) {
+	mu.Lock()
+	defer mu.Unlock()
 	d := net.Dialer{Timeout: timeout}
 	return d.Dial("tcp", addr)
 }
