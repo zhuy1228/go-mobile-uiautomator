@@ -9,15 +9,16 @@ import (
 )
 
 func main() {
-
+	addr := "127.0.0.1:5037"
+	serial := "emulator-5556"
+	FilePushInstall()
+	go adb.LaunchUiautomator(addr, serial)
+	select {}
 }
 
 // 文件推送加安装
 func FilePushInstall() {
 	addr := "127.0.0.1:5037"
-	// local := "./assets/app-uiautomator.apk"
-	// remote := "/sdcard/app-uiautomator.apk"
-	// mode := 0644
 	serial := "emulator-5556"
 	payload, _ := adb.ListDevicesRaw(addr, 15*time.Second)
 	m := adb.ParseDevicesPayload(payload)
@@ -26,7 +27,7 @@ func FilePushInstall() {
 
 	services.InstallServiceJar(addr, serial)
 
-	services.InstallServiceApk(addr, serial)
+	// services.InstallServiceApk(addr, serial)
 }
 
 // 文件推送验证

@@ -182,3 +182,41 @@ func ReadResponse(conn net.Conn, debug bool) (string, []byte, error) {
 	// unexpected token
 	return st, nil, nil
 }
+
+// LaunchUiautomator connects to adb server, transports to device, starts uiautomator2,
+// and returns an io.Reader for streaming logs.
+func LaunchUiautomator(addr, serial string) {
+	conn, err := DialADB(addr, 15*time.Second)
+	if err != nil {
+		fmt.Println("dial error:", err)
+		return
+	}
+	// transport
+	adbSend(conn, "host:transport:"+serial)
+	resp, _ := adbReadResponse(conn)
+	fmt.Println("transport resp:", resp)
+
+	// shell
+	cmd := "shell:CLASSPATH=/data/local/tmp/u2.jar app_process / com.wetest.uia2.Main"
+	adbSend(conn, cmd)
+	resp, _ = adbReadResponse(conn)
+	fmt.Println("shell resp:", resp)
+
+	// 输出流
+	io.Copy(os.Stdout, conn)
+}
+
+func adbSend(conn net.Conn, cmd string) error {
+	length := fmt.Sprintf("%04x", len(cmd))
+	_, err := conn.Write([]byte(length + cmd))
+	return err
+}
+
+func adbReadResponse(conn net.Conn) (string, error) {
+	buf := make([]byte, 4)
+	_, err := conn.Read(buf)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
