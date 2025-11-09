@@ -4,13 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"go-mobile-uiautomator/adb"
+	selector "go-mobile-uiautomator/libs"
 	"go-mobile-uiautomator/services"
 	"time"
 )
 
+const serial = "192.168.4.103:5555"
+const addr = "127.0.0.1:5037"
+
 func main() {
-	addr := "127.0.0.1:5037"
-	serial := "emulator-5556"
+	selector.Example()
+}
+
+func LaunchUiautomator() {
 	FilePushInstall()
 	go adb.LaunchUiautomator(addr, serial)
 	select {}
@@ -18,8 +24,6 @@ func main() {
 
 // 文件推送加安装
 func FilePushInstall() {
-	addr := "127.0.0.1:5037"
-	serial := "emulator-5556"
 	payload, _ := adb.ListDevicesRaw(addr, 15*time.Second)
 	m := adb.ParseDevicesPayload(payload)
 	b2, _ := json.MarshalIndent(m, "", "  ")
@@ -33,7 +37,6 @@ func FilePushInstall() {
 // 文件推送验证
 func FilePush() {
 	// edit these for your environment
-	addr := "127.0.0.1:5037"
 	local := "C:/Users/01/Desktop/aaa.PNG"
 	remote := "/sdcard/ccc.PNG"
 	mode := 0644
@@ -66,7 +69,6 @@ func FilePush() {
 
 // 连接验证
 func Connect() {
-	addr := "127.0.0.1:5037"
 	targetProduct := "23113RKC6C"
 
 	serial, err := adb.FindSerialByProduct(addr, targetProduct)
