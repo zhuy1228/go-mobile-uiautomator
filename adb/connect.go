@@ -39,6 +39,7 @@ func readN(conn net.Conn, n int, timeout time.Duration) ([]byte, error) {
 		}
 		total += nr
 	}
+	conn.SetReadDeadline(time.Time{})
 	return buf, nil
 }
 
@@ -81,6 +82,7 @@ func TransportTo(conn net.Conn, serial string) error {
 	if status != "OKAY" {
 		return fmt.Errorf("unexpected transport status: %s", status)
 	}
+	conn.SetWriteDeadline(time.Time{})
 	return nil
 }
 
@@ -192,14 +194,14 @@ func LaunchUiautomator(addr, serial string) {
 		return
 	}
 	// transport
-	adbSend(conn, "host:transport:"+serial)
-	resp, _ := adbReadResponse(conn)
-	fmt.Println("transport resp:", resp)
-
+	// adbSend(conn, "host:transport:"+serial)
+	// resp, _ := adbReadResponse(conn)
+	// fmt.Println("transport resp:", resp)
+	TransportTo(conn, serial)
 	// shell
 	cmd := "shell:CLASSPATH=/data/local/tmp/u2.jar app_process / com.wetest.uia2.Main"
 	adbSend(conn, cmd)
-	resp, _ = adbReadResponse(conn)
+	resp, _ := adbReadResponse(conn)
 	fmt.Println("shell resp:", resp)
 
 	// 输出流
