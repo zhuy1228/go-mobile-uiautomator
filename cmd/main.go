@@ -4,16 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"go-mobile-uiautomator/adb"
-	selector "go-mobile-uiautomator/libs"
 	"go-mobile-uiautomator/services"
 	"time"
 )
 
-const serial = "192.168.4.103:5555"
+const serial = "emulator-5556"
 const addr = "127.0.0.1:5037"
 
 func main() {
-	selector.Example()
+	LaunchUiautomator()
 }
 
 func LaunchUiautomator() {

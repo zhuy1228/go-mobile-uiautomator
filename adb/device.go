@@ -21,6 +21,11 @@ type DeviceInfo struct {
 	Props       map[string]string
 }
 
+type AdbDevice struct {
+	Connect net.Conn
+	Serial  string
+}
+
 // ListDevicesRaw: 请求 host:devices 并返回原始 payload
 func ListDevicesRaw(addr string, timeout time.Duration) (string, error) {
 	conn, err := DialADB(addr, timeout)
