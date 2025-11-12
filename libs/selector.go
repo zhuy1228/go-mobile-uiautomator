@@ -1,4 +1,4 @@
-package selector
+package libs
 
 import (
 	"encoding/json"
