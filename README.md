@@ -19,6 +19,14 @@
 
 ## 安装
 
+### 作为项目引用
+
+```bash
+go get github.com/zhuy1228/go-mobile-uiautomator@latest
+```
+
+### 从源码构建
+
 ```bash
 git clone https://github.com/zhuy1228/go-mobile-uiautomator.git
 cd go-mobile-uiautomator
@@ -40,6 +48,8 @@ adb devices
 修改 `cmd/main.go` 中的设备配置：
 
 ```go
+import "github.com/zhuy1228/go-mobile-uiautomator/adb"
+
 const serial = "your-device-serial"  // 你的设备序列号
 const addr = "127.0.0.1:5037"        // ADB 服务器地址
 ```
@@ -146,7 +156,7 @@ go-mobile-uiautomator/
 ├── config/                 # 配置管理
 │   └── index.go
 ├── libs/                   # 工具库
-│   ├── repuest.go         # HTTP over ADB
+│   ├── request.go         # HTTP over ADB
 │   └── selector.go        # UI 选择器
 ├── services/               # 服务模块
 │   └── install_service.go # UIAutomator2 安装
@@ -234,6 +244,8 @@ A: 确保：
 ## 依赖
 
 ```go
+module github.com/zhuy1228/go-mobile-uiautomator
+
 require (
     gopkg.in/yaml.v3 v3.0.1
 )

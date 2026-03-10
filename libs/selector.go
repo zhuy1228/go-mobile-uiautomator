@@ -7,28 +7,30 @@ import (
 	"strconv"
 )
 
-// FieldMeta 保存每个字段对应的 mask 位和默认值（nil 表示无默认值）
+// FieldMeta 定义选择器字段的掩码位和默认值
+// Bit 为该字段对应的掩码位，Default 为默认值（nil 表示无默认值）
 type FieldMeta struct {
 	Bit     uint32
 	Default interface{}
 }
 
 // Selector 表示一个 UiSelector 的构造器
+// 用于构建 Android UI 元素的查询条件
 type Selector struct {
-	// 存放字段及其值（只包含显式设置的字段）
+	// 存放已设置的字段及其值
 	fields map[string]interface{}
 
-	// mask 值（通过设置/删除字段自动维护）
+	// 掩码值（通过设置/删除字段自动维护）
 	mask uint32
 
-	// childOrSibling 顺序列表，元素为 "child" 或 "sibling"
+	// 子/兄弟关系列表，元素为 "child" 或 "sibling"
 	childOrSibling []string
 
 	// 对应的嵌套 Selector 列表，长度与 childOrSibling 相同
 	childOrSiblingSelector []*Selector
 }
 
-// 字段元数据（与 Python 版本一致）
+// fieldDefs 定义所有支持的选择器字段及其元数据（与 Python 版 uiautomator2 一致）
 var fieldDefs = map[string]FieldMeta{
 	"text":                  {Bit: 0x01, Default: nil},
 	"textContains":          {Bit: 0x02, Default: nil},
@@ -57,7 +59,7 @@ var fieldDefs = map[string]FieldMeta{
 	"instance":              {Bit: 0x01000000, Default: 0},
 }
 
-// New creates a Selector and可选传入初始字段
+// New 创建一个新的 Selector，可选传入初始字段
 func New(initial map[string]interface{}) (*Selector, error) {
 	s := &Selector{
 		fields:                 make(map[string]interface{}),
@@ -73,7 +75,7 @@ func New(initial map[string]interface{}) (*Selector, error) {
 	return s, nil
 }
 
-// MustNew 跟 New 相同，但在错误时 panic，便于简洁示例
+// MustNew 与 New 相同，但在出错时 panic，适合简洁的初始化场景
 func MustNew(initial map[string]interface{}) *Selector {
 	s, err := New(initial)
 	if err != nil {
@@ -82,42 +84,43 @@ func MustNew(initial map[string]interface{}) *Selector {
 	return s
 }
 
-// validateValue 对给定字段和值做类型校验（布尔字段与整数字段）
+// validateValue 对给定字段和值进行类型校验
+// 布尔字段要求值为 bool 类型，整数字段要求值为整数类型
 func validateValue(key string, val interface{}) error {
 	meta, ok := fieldDefs[key]
 	if !ok {
-		return fmt.Errorf("field %s is not allowed", key)
+		return fmt.Errorf("不支持的字段: %s", key)
 	}
 	if meta.Default == false {
-		// 期望 bool
+		// 布尔字段校验
 		_, ok := val.(bool)
 		if !ok {
-			return fmt.Errorf("%s must be bool", key)
+			return fmt.Errorf("%s 必须是 bool 类型", key)
 		}
 		return nil
 	}
-	// 对整数字段（Default 为 int 类型）要求 int
+	// 整数字段校验
 	switch d := meta.Default.(type) {
 	case int:
-		// 支持 int 和可被转为 int 的数值（如 int64）
 		switch val.(type) {
 		case int, int8, int16, int32, int64:
 			return nil
 		case uint, uint8, uint16, uint32, uint64:
 			return nil
 		default:
-			return fmt.Errorf("%s must be integer type, default=%v", key, d)
+			return fmt.Errorf("%s 必须是整数类型, 默认值=%v", key, d)
 		}
 	default:
-		// 其它字段没有特别要求
+		// 其他字段无特殊类型要求
 		return nil
 	}
 }
 
-// Set 设置字段并更新 mask；若字段非法或类型不对则返回错误
+// Set 设置字段值并更新掩码
+// 如果字段名非法或类型不匹配则返回错误
 func (s *Selector) Set(key string, val interface{}) error {
 	if _, ok := fieldDefs[key]; !ok {
-		return fmt.Errorf("%s is not allowed", key)
+		return fmt.Errorf("不支持的字段: %s", key)
 	}
 	if err := validateValue(key, val); err != nil {
 		return err
@@ -127,10 +130,11 @@ func (s *Selector) Set(key string, val interface{}) error {
 	return nil
 }
 
-// Delete 删除字段并更新 mask；幂等（删除不存在字段不报错）
+// Delete 删除字段并更新掩码
+// 删除不存在的字段不会报错（幂等操作）
 func (s *Selector) Delete(key string) error {
 	if _, ok := fieldDefs[key]; !ok {
-		return fmt.Errorf("%s is not allowed", key)
+		return fmt.Errorf("不支持的字段: %s", key)
 	}
 	if _, present := s.fields[key]; present {
 		delete(s.fields, key)
@@ -139,12 +143,12 @@ func (s *Selector) Delete(key string) error {
 	return nil
 }
 
-// Mask 返回当前 mask（只读）
+// Mask 返回当前掩码值（只读）
 func (s *Selector) Mask() uint32 {
 	return s.mask
 }
 
-// Child 在末尾添加 child
+// Child 添加一个子元素选择器
 func (s *Selector) Child(initial map[string]interface{}) (*Selector, error) {
 	child, err := New(initial)
 	if err != nil {
@@ -155,7 +159,7 @@ func (s *Selector) Child(initial map[string]interface{}) (*Selector, error) {
 	return s, nil
 }
 
-// Sibling 在末尾添加 sibling
+// Sibling 添加一个兄弟元素选择器
 func (s *Selector) Sibling(initial map[string]interface{}) (*Selector, error) {
 	child, err := New(initial)
 	if err != nil {
@@ -166,7 +170,8 @@ func (s *Selector) Sibling(initial map[string]interface{}) (*Selector, error) {
 	return s, nil
 }
 
-// UpdateInstance 更新最后一个 childOrSiblingSelector 的 instance 字段（或根 selector）
+// UpdateInstance 更新最后一个子/兄弟选择器的 instance 字段
+// 如果没有子/兄弟选择器，则更新根选择器的 instance
 func (s *Selector) UpdateInstance(i int) error {
 	n := len(s.childOrSiblingSelector)
 	if n > 0 {
@@ -175,7 +180,7 @@ func (s *Selector) UpdateInstance(i int) error {
 	return s.Set("instance", i)
 }
 
-// Clone 深拷贝 Selector，包括子/兄弟
+// Clone 深拷贝当前 Selector，包括所有子/兄弟选择器
 func (s *Selector) Clone() *Selector {
 	clone := &Selector{
 		fields:                 make(map[string]interface{}, len(s.fields)),
@@ -184,8 +189,6 @@ func (s *Selector) Clone() *Selector {
 		childOrSiblingSelector: make([]*Selector, 0, len(s.childOrSiblingSelector)),
 	}
 	for k, v := range s.fields {
-		// 简单深拷贝：对于常见类型（string,bool,int）直接赋值即可。
-		// 若值为复杂结构，调用方应使用 ToMap/ToJSON 再 Parse 得到深拷贝。
 		clone.fields[k] = v
 	}
 	for _, c := range s.childOrSiblingSelector {
@@ -194,7 +197,7 @@ func (s *Selector) Clone() *Selector {
 	return clone
 }
 
-// ToMap 序列化为 map，便于 RPC 调用或 JSON 编码
+// ToMap 将选择器序列化为 map，便于 JSON 编码或 RPC 调用
 func (s *Selector) ToMap() map[string]interface{} {
 	out := make(map[string]interface{}, len(s.fields)+3)
 	for k, v := range s.fields {
@@ -212,32 +215,29 @@ func (s *Selector) ToMap() map[string]interface{} {
 	return out
 }
 
-// ToJSON 返回 ToMap 的 JSON 编码
+// ToJSON 返回选择器的 JSON 编码
 func (s *Selector) ToJSON() ([]byte, error) {
 	return json.Marshal(s.ToMap())
 }
 
-// FromMap 从 map 恢复 Selector（简单实现，忽略非法字段）
+// FromMap 从 map 恢复 Selector 实例
+// 自动解析已知字段、掩码和子/兄弟选择器
 func FromMap(data map[string]interface{}) (*Selector, error) {
-	// 提取根字段
 	root := &Selector{
 		fields:                 make(map[string]interface{}),
 		childOrSibling:         []string{},
 		childOrSiblingSelector: []*Selector{},
 		mask:                   0,
 	}
-	// 读取已知字段
-	for k, meta := range fieldDefs {
+	// 恢复已知字段
+	for k := range fieldDefs {
 		if v, ok := data[k]; ok {
-			// 尝试 Set 以做类型校验并设置 mask
 			if err := root.Set(k, v); err != nil {
 				return nil, err
 			}
-			// 注意：Set 已经更新了 mask
-			_ = meta
 		}
 	}
-	// 恢复 mask（如果提供了 mask，并且为数值）
+	// 恢复掩码值
 	if m, ok := data["mask"]; ok {
 		switch mv := m.(type) {
 		case float64:
@@ -248,11 +248,9 @@ func FromMap(data map[string]interface{}) (*Selector, error) {
 			root.mask = uint32(mv)
 		case int64:
 			root.mask = uint32(mv)
-		default:
-			// 忽略不能解析的 mask
 		}
 	}
-	// 恢复 childOrSibling 列表和对应 selector（期望 childOrSiblingSelector 为 []map[string]interface{}）
+	// 恢复子/兄弟关系列表
 	if cs, ok := data["childOrSibling"]; ok {
 		if arr, ok := cs.([]interface{}); ok {
 			for _, e := range arr {
@@ -262,6 +260,7 @@ func FromMap(data map[string]interface{}) (*Selector, error) {
 			}
 		}
 	}
+	// 恢复子/兄弟选择器
 	if css, ok := data["childOrSiblingSelector"]; ok {
 		if arr, ok := css.([]interface{}); ok {
 			for _, item := range arr {
@@ -278,13 +277,13 @@ func FromMap(data map[string]interface{}) (*Selector, error) {
 	return root, nil
 }
 
-// UpdateAtPath 在指定路径（child 索引链）上更新字段
-// path: 逐级索引，例如 [0,2] 表示 childOrSiblingSelector[0].childOrSiblingSelector[2]
+// UpdateAtPath 在指定路径上更新字段
+// path 为逐级索引，例如 [0,2] 表示 childOrSiblingSelector[0].childOrSiblingSelector[2]
 func (s *Selector) UpdateAtPath(path []int, updates map[string]interface{}) error {
 	node := s
 	for _, idx := range path {
 		if idx < 0 || idx >= len(node.childOrSiblingSelector) {
-			return errors.New("path out of range")
+			return errors.New("路径索引越界")
 		}
 		node = node.childOrSiblingSelector[idx]
 	}
@@ -296,10 +295,9 @@ func (s *Selector) UpdateAtPath(path []int, updates map[string]interface{}) erro
 	return nil
 }
 
-// String 实现 fmt.Stringer，输出友好可读的 Selector 表示（类似 Python 的 __str__）
+// String 实现 fmt.Stringer 接口，输出可读的选择器表示
 func (s *Selector) String() string {
 	m := s.ToMap()
-	// 删除空的 childOrSibling 字段以保持简洁
 	if _, ok := m["childOrSibling"]; !ok {
 		delete(m, "childOrSibling")
 		delete(m, "childOrSiblingSelector")
@@ -308,46 +306,46 @@ func (s *Selector) String() string {
 	return "Selector " + string(b)
 }
 
-// Example 用法示例（不是正式测试，仅供快速手动运行）
+// Example 使用示例（仅供参考，非单元测试）
 func Example() {
-	// 初始化根 selector
+	// 初始化根选择器
 	root := MustNew(map[string]interface{}{
 		"className": "android.widget.LinearLayout",
 	})
 
-	// 添加 child
+	// 添加子元素选择器
 	root.Child(map[string]interface{}{
 		"text":     "下一步",
 		"instance": 0,
 	})
 
-	// 更新最后一个 child 的 instance
+	// 更新最后一个子选择器的 instance
 	_ = root.UpdateInstance(2)
 
 	// 深拷贝
 	cpy := root.Clone()
 
-	// 序列化到 JSON
+	// 序列化为 JSON
 	j, _ := cpy.ToJSON()
 	fmt.Println(string(j))
 }
 
-// 简单测试函数（你可在 package 内使用 testing 包将其改写成真正的单元测试）
+// SimpleTests 简单测试函数（建议迁移到 _test.go 文件中使用 testing 包）
 func SimpleTests() {
-	// set & delete
+	// 设置与删除字段
 	s := MustNew(map[string]interface{}{"text": "hello"})
-	fmt.Println("mask after set:", strconv.FormatUint(uint64(s.Mask()), 10))
+	fmt.Println("设置后掩码:", strconv.FormatUint(uint64(s.Mask()), 10))
 	_ = s.Delete("text")
-	fmt.Println("mask after delete:", strconv.FormatUint(uint64(s.Mask()), 10))
+	fmt.Println("删除后掩码:", strconv.FormatUint(uint64(s.Mask()), 10))
 
-	// bool 类型校验
+	// 类型校验：bool 字段传入非 bool 值应报错
 	_, err := New(map[string]interface{}{"checkable": "yes"})
-	fmt.Println("expected error for bad bool:", err != nil)
+	fmt.Println("非法 bool 值报错:", err != nil)
 
-	// clone 深拷贝检查
+	// 深拷贝独立性验证
 	s2 := MustNew(map[string]interface{}{"text": "a"})
 	s2.Child(map[string]interface{}{"text": "b", "instance": 1})
 	c := s2.Clone()
 	c.childOrSibling[0] = "sibling"
-	fmt.Println("original childOrSibling:", s2.childOrSibling[0], "clone childOrSibling:", c.childOrSibling[0])
+	fmt.Println("原始 childOrSibling:", s2.childOrSibling[0], "克隆 childOrSibling:", c.childOrSibling[0])
 }
