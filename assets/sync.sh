@@ -5,7 +5,7 @@ set -e
 
 APK_VERSION="2.4.0"
 APK_VERSION=${APK_VERSION//[\"\']}
-JAR_VERSION="0.1.5"
+JAR_VERSION="0.2.2"
 
 cd "$(dirname $0)"
 
