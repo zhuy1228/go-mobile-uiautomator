@@ -19,6 +19,7 @@ Go 语言实现的 Android UIAutomator2 客户端库。纯 Go 实现，零外部
 ## 功能特性
 
 - ✅ **ADB 隧道** - 纯 Go 实现 ADB TCP 协议，通过 ADB 隧道直连设备，无需端口转发
+- ✅ **资源内嵌** - 通过 `go:embed` 将 u2.jar/APK 编译进二进制，`go get` 即用，无需额外文件
 - ✅ **设备管理** - 设备发现、连接、信息查询
 - ✅ **UIAutomator2 服务** - 自动启动和管理 UIAutomator2 服务端
 - ✅ **UI 元素操作** - 点击、滑动、输入、拖拽、手势等完整 UI 操作
@@ -488,20 +489,22 @@ selector.Child(map[string]interface{}{
 jsonData, _ := selector.ToJSON()
 ```
 
-### APK 安装
+### UIAutomator2 服务部署
 
 ```go
 import "github.com/zhuy1228/go-mobile-uiautomator/services"
 
-// 安装 UIAutomator2 JAR（自动检查设备端是否已存在）
-err := services.InstallServiceJar(addr, serial, "", false)
+// 安装 UIAutomator2 JAR（自动从内嵌资源推送，检查设备端是否已存在）
+err := services.InstallServiceJar(addr, serial, false)
 
-// 安装 UIAutomator2 APK
-err = services.InstallServiceApk(addr, serial, "", false)
+// 安装 UIAutomator2 APK（自动从内嵌资源推送）
+err = services.InstallServiceApk(addr, serial, false)
 
-// 强制重新安装
-err = services.InstallServiceApk(addr, serial, "/path/to/custom.apk", true)
+// 强制重新安装（force=true 跳过存在检查）
+err = services.InstallServiceJar(addr, serial, true)
 ```
+
+> 资源文件通过 `go:embed` 编译进二进制，无需在本地维护 JAR/APK 文件。
 
 ## 项目结构
 
@@ -529,9 +532,11 @@ go-mobile-uiautomator/
 ├── services/                   # 服务模块
 │   ├── install_service.go     # UIAutomator2 安装服务
 │   └── doc.go                 # 包文档
-├── assets/                     # 资源文件
-│   ├── u2.jar                 # UIAutomator2 服务端
+├── assets/                     # 资源文件（通过 go:embed 编译进二进制）
+│   ├── embed.go               # go:embed 指令，导出 JarData/ApkData/ApkTestData
+│   ├── u2.jar                 # UIAutomator2 服务端 JAR
 │   ├── app-uiautomator.apk   # UIAutomator2 APK
+│   ├── app-uiautomator-test.apk # UIAutomator2 测试 APK
 │   └── sync.sh               # 资源同步脚本
 ├── cmd/                        # 主程序入口
 │   └── main.go
@@ -556,6 +561,9 @@ go-mobile-uiautomator/
 ├─────────────────────────────────────────────────┤
 │  adb.CreateTunnel (纯 Go ADB 协议)               │
 │  (TCP → ADB Server → transport → tcp:9008)     │
+├─────────────────────────────────────────────────┤
+│  assets.JarData / assets.ApkData (go:embed)     │
+│  (资源文件编译进二进制，零配置部署)                  │
 ├─────────────────────────────────────────────────┤
 │  Android 设备                                    │
 │  UIAutomator2 HTTP 服务 (端口 9008)              │
@@ -630,9 +638,11 @@ for _, dev := range devices {
 ### Q: UIAutomator2 服务启动失败？
 
 确保：
-1. `assets/u2.jar` 文件存在
-2. 设备已正确连接且已授权 USB 调试
-3. 使用 `NewDevice()` 会自动推送 JAR 并启动服务，无需手动管理
+1. 设备已正确连接且已授权 USB 调试
+2. ADB Server 正在运行（默认 `127.0.0.1:5037`）
+3. 使用 `NewDevice()` 会自动从内嵌资源推送 JAR/APK 并启动服务，无需手动管理
+
+> u2.jar 和 APK 通过 `go:embed` 编译进二进制，`go get` 后即可直接使用，无需额外下载资源文件。
 
 ### Q: 如何处理弹窗干扰自动化？
 
@@ -665,6 +675,7 @@ d.ByText("Hello").Click()
 ## 开发计划
 
 - [x] 纯 Go ADB 协议实现
+- [x] go:embed 资源内嵌（零配置部署）
 - [x] ADB 隧道直连（与 Python 一致）
 - [x] 设备发现和连接管理
 - [x] JSON-RPC 2.0 通信层
