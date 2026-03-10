@@ -233,6 +233,20 @@ func PushFile(addr, serial, localPath, remotePath string, mode int, debug bool) 
 	return s.SyncPushFile(localPath, remotePath, mode, debug)
 }
 
+// PushData 通过 ADB 推送内存数据到设备
+// 与 PushFile 功能相同，但数据来源是 []byte 而非本地文件
+// 适用于通过 go:embed 嵌入的资源文件
+func PushData(addr, serial string, data []byte, remotePath string, mode int, debug bool) (int64, error) {
+	conn, err := ConnectToDevice(addr, serial, 15*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	s := InitSync(conn)
+	return s.SyncPushData(data, remotePath, mode, debug)
+}
+
 // ---------- ADB 隧道（与 Python uiautomator2 完全一致） ----------
 
 // CreateTunnel 建立到设备指定端口的 ADB 隧道

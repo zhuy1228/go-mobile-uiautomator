@@ -1,6 +1,7 @@
 package adb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -97,6 +98,84 @@ func (s *Sync) SyncPushFile(localPath, remotePath string, mode int, debug bool) 
 	done := make([]byte, 8)
 	copy(done[:4], []byte("DONE"))
 	mtime := uint32(fi.ModTime().Unix())
+	binary.LittleEndian.PutUint32(done[4:], mtime)
+	if _, err := s.Conn.Write(done); err != nil {
+		return total, err
+	}
+	if debug {
+		fmt.Println("[调试] 发送 DONE，等待响应")
+	}
+
+	// 读取最终响应
+	resp, msg, err := ReadSyncStatus(s.Conn)
+	if err != nil {
+		return total, err
+	}
+	if resp != "OKAY" {
+		if len(msg) > 0 {
+			return total, fmt.Errorf("同步失败: %s", string(msg))
+		}
+		return total, fmt.Errorf("同步失败: %s", resp)
+	}
+	return total, nil
+}
+
+// SyncPushData 将内存中的数据推送到设备
+// 与 SyncPushFile 功能相同，但数据来源是 []byte 而非本地文件
+// 适用于通过 go:embed 嵌入的资源文件
+func (s *Sync) SyncPushData(data []byte, remotePath string, mode int, debug bool) (int64, error) {
+	// 初始化同步模式
+	if err := s.StartSync(); err != nil {
+		return 0, err
+	}
+
+	// 构造 SEND 请求
+	modeStr := strconv.Itoa(syscall.S_IFREG | mode)
+	sendPayload := []byte(remotePath + "," + modeStr)
+
+	hdr := make([]byte, 8)
+	copy(hdr[:4], []byte("SEND"))
+	binary.LittleEndian.PutUint32(hdr[4:], uint32(len(sendPayload)))
+	if _, err := s.Conn.Write(hdr); err != nil {
+		return 0, err
+	}
+	if _, err := s.Conn.Write(sendPayload); err != nil {
+		return 0, err
+	}
+	if debug {
+		fmt.Printf("[调试] 发送 SEND 请求: 长度=%d 路径=%s 权限=%s 数据大小=%d\n", len(sendPayload), remotePath, modeStr, len(data))
+	}
+
+	// 分块写入数据
+	reader := bytes.NewReader(data)
+	var total int64
+	buf := make([]byte, maxChunk)
+	for {
+		n, rerr := reader.Read(buf)
+		if n > 0 {
+			dataHdr := make([]byte, 8)
+			copy(dataHdr[:4], []byte("DATA"))
+			binary.LittleEndian.PutUint32(dataHdr[4:], uint32(n))
+			if _, err := s.Conn.Write(dataHdr); err != nil {
+				return total, err
+			}
+			if _, err := s.Conn.Write(buf[:n]); err != nil {
+				return total, err
+			}
+			total += int64(n)
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			return total, rerr
+		}
+	}
+
+	// 发送 DONE 命令（使用当前时间戳）
+	done := make([]byte, 8)
+	copy(done[:4], []byte("DONE"))
+	mtime := uint32(time.Now().Unix())
 	binary.LittleEndian.PutUint32(done[4:], mtime)
 	if _, err := s.Conn.Write(done); err != nil {
 		return total, err

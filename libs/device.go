@@ -27,11 +27,10 @@ type Device struct {
 	serial string // 设备序列号
 
 	// UIAutomator2 服务配置
-	serverPort int    // 设备端服务端口（默认 9008）
-	debug      bool   // 调试模式
-	jarPath    string // 本地 u2.jar 路径（空字符串使用默认路径）
+	serverPort int  // 设备端服务端口（默认 9008）
+	debug      bool // 调试模式
 
-	// 设备连接接口（通过 adb forward 连接）
+	// 设备连接接口（通过 ADB 隧道直连）
 	dev AdbDevice
 
 	// JSON-RPC 调用器
@@ -49,16 +48,15 @@ type Device struct {
 }
 
 // NewDevice 创建一个新的 Device 客户端并启动 UIAutomator2 服务
-// 使用 adb forward 端口转发，与 Python uiautomator2 相同的方案
+// 通过 ADB 隧道直连设备，与 Python uiautomator2 完全一致
 //
 // serial: 设备序列号（如 "emulator-5554"）
 // addr: 可选，ADB 服务器地址，不传则使用默认值 "127.0.0.1:5037"
 //
 // 创建后会自动执行：
-//  1. 设置 adb forward 端口转发
-//  2. 推送 u2.jar 到设备（如果尚未存在）
-//  3. 启动 UIAutomator2 服务
-//  4. 等待服务就绪
+//  1. 推送内嵌的 u2.jar 到设备（如果尚未存在）
+//  2. 启动 UIAutomator2 服务
+//  3. 等待服务就绪
 func NewDevice(serial string, addr ...string) (*Device, error) {
 	a := DefaultADBAddr
 	if len(addr) > 0 && addr[0] != "" {
@@ -80,8 +78,8 @@ func NewDevice(serial string, addr ...string) (*Device, error) {
 		return d.jsonrpcCall(method, params, timeout)
 	})
 
-	// 推送 u2.jar 到设备（仅在文件不存在时推送）
-	if err := services.InstallServiceJar(a, serial, d.jarPath, false); err != nil {
+	// 推送内嵌的 u2.jar 到设备（仅在文件不存在时推送）
+	if err := services.InstallServiceJar(a, serial, false); err != nil {
 		return nil, fmt.Errorf("安装 u2.jar 失败: %w", err)
 	}
 
@@ -198,12 +196,6 @@ func (d *Device) checkAlive() bool {
 		return false
 	}
 	return string(resp.Content) == "pong"
-}
-
-// SetJarPath 设置本地 u2.jar 路径
-// 传空字符串则使用默认路径 (assets/u2.jar)
-func (d *Device) SetJarPath(path string) {
-	d.jarPath = path
 }
 
 // launchAndWait 启动 UIAutomator2 进程并等待就绪
