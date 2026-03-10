@@ -6,91 +6,57 @@ import (
 	"time"
 
 	"github.com/zhuy1228/go-mobile-uiautomator/adb"
-	"github.com/zhuy1228/go-mobile-uiautomator/services"
+	"github.com/zhuy1228/go-mobile-uiautomator/libs"
 )
 
 // 设备配置，根据实际环境修改
 const (
-	serial = "emulator-5554"  // 设备序列号
-	addr   = "127.0.0.1:5037" // ADB 服务器地址
+	serial = "emulator-5554" // 设备序列号
 )
 
 func main() {
-	filePushInstall()
+	launchUiautomator()
 }
 
 // launchUiautomator 推送服务文件并启动 UIAutomator2
 func launchUiautomator() {
-	filePushInstall()
-	go adb.LaunchUiautomator(addr, serial)
-	select {} // 阻塞等待，持续输出日志
-}
+	// 列出设备
+	payload, _ := adb.ListDevicesRaw(libs.DefaultADBAddr, 15*time.Second)
+	devices := adb.ParseDevicesPayload(payload)
+	b, _ := json.MarshalIndent(devices, "", "  ")
+	fmt.Println(string(b))
 
-// filePushInstall 列出设备并推送 u2.jar 到设备
-func filePushInstall() {
-	payload, _ := adb.ListDevicesRaw(addr, 15*time.Second)
-	m := adb.ParseDevicesPayload(payload)
-	b2, _ := json.MarshalIndent(m, "", "  ")
-	fmt.Println(string(b2))
-
-	services.InstallServiceJar(addr, serial)
-}
-
-// filePush 文件推送验证示例
-func filePush() {
-	// 根据实际环境修改以下参数
-	local := "C:/Users/01/Desktop/aaa.PNG"
-	remote := "/sdcard/ccc.PNG"
-	mode := 0644
-	targetProduct := "23113RKC6C"
-
-	devSerial, err := adb.FindSerialByProduct(addr, targetProduct)
+	// 使用 libs.NewDevice 启动 UIAutomator2 服务（不传 addr 使用默认地址）
+	d, err := libs.NewDevice(serial)
 	if err != nil {
-		fmt.Println("查找设备失败:", err)
+		fmt.Println("启动失败:", err)
 		return
 	}
-	fmt.Println("找到设备:", devSerial)
+	defer d.Close() // 退出时停止 UIAutomator2
 
-	conn, err := adb.DialADB(addr, 15*time.Second)
+	// 获取设备信息
+	info, err := d.Info()
 	if err != nil {
-		fmt.Println("连接失败:", err)
+		fmt.Println("获取设备信息失败:", err)
 		return
 	}
-	defer conn.Close()
-	adb.TransportTo(conn, devSerial)
+	fmt.Printf("设备信息: %v\n", info)
 
-	sync := adb.InitSync(conn)
-	n, err := sync.SyncPushFile(local, remote, mode, true)
-	if err != nil {
-		fmt.Println("推送失败:", err)
+	// 启动 Chrome
+	d.AppStart("com.android.chrome", "", true)
+
+	// 设置隐式等待 10 秒
+	d.ImplicitlyWait(10)
+
+	// 开启调试模式，查看 JSON-RPC 请求和响应
+	d.SetDebug(true)
+
+	// 通过文本查找元素并点击
+	if err = d.ByText("在裝置上新增帳戶").Click(); err != nil {
+		fmt.Println("点击失败:", err)
 	} else {
-		fmt.Printf("推送成功, 共写入 %d 字节\n", n)
+		fmt.Println("点击成功")
 	}
-}
 
-// connect 连接验证示例
-func connect() {
-	targetProduct := "23113RKC6C"
-
-	devSerial, err := adb.FindSerialByProduct(addr, targetProduct)
-	if err != nil {
-		fmt.Println("查找设备失败:", err)
-		return
-	}
-	fmt.Println("找到设备:", devSerial)
-
-	conn, err := adb.DialADB(addr, 15*time.Second)
-	if err != nil {
-		fmt.Println("连接失败:", err)
-		return
-	}
-	defer conn.Close()
-	adb.TransportTo(conn, devSerial)
-
-	out, err := adb.ExecShell(conn, "getprop")
-	if err != nil {
-		fmt.Println("Shell 执行失败:", err)
-	} else {
-		fmt.Printf("Shell 输出: %q\n", string(out))
-	}
+	select {} // 阻塞等待
 }

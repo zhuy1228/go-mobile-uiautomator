@@ -1,7 +1,6 @@
 package libs
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,15 +11,30 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/zhuy1228/go-mobile-uiautomator/adb"
 )
 
 // ---------- 外部接口和类型定义 ----------
 
-// AdbDevice 定义了通过 ADB 隧道创建设备连接的接口
+// AdbDevice 定义了设备连接接口
 type AdbDevice interface {
 	// CreateConnection 建立到设备的 TCP 连接
 	// network 通常为 "tcp"，port 为设备上服务监听端口
 	CreateConnection(network string, port int) (net.Conn, error)
+}
+
+// AdbTunnelDevice 通过 ADB 隧道直连设备（与 Python uiautomator2 完全一致）
+// 每次 CreateConnection 会建立一条新的 ADB 隧道，无需 adb forward，无需端口管理
+// 等同于 Python 中 AdbHTTPConnection 继承 HTTPConnection 并重写 connect() 的方案
+type AdbTunnelDevice struct {
+	AdbAddr string // ADB 服务器地址
+	Serial  string // 设备序列号
+}
+
+// CreateConnection 建立到设备指定端口的 ADB 隧道连接
+func (d *AdbTunnelDevice) CreateConnection(network string, port int) (net.Conn, error) {
+	return adb.CreateTunnel(d.AdbAddr, d.Serial, port)
 }
 
 // HTTPResponse 封装 HTTP 响应数据
@@ -49,126 +63,25 @@ var (
 	ErrHTTPFailed = errors.New("HTTP 请求失败")
 )
 
-// ---------- AdbHTTPConnection：通过 ADB 隧道发送 HTTP 请求 ----------
-
-// AdbHTTPConnection 基于 net.Conn 实现的 HTTP 连接
-// 通过 ADB 端口转发直接与设备端 UIAutomator2 服务通信
-type AdbHTTPConnection struct {
-	Conn net.Conn
-}
-
-// NewAdbHTTPConnection 创建一个新的 ADB HTTP 连接
-// dev 为设备接口，port 为设备端服务端口，timeout 为连接超时
-func NewAdbHTTPConnection(dev AdbDevice, port int, timeout time.Duration) (*AdbHTTPConnection, error) {
-	conn, err := dev.CreateConnection("tcp", port)
-	if err != nil {
-		return nil, fmt.Errorf("无法连接到 UIAutomator2 服务: %w", err)
-	}
-	_ = conn.SetDeadline(time.Now().Add(timeout))
-	return &AdbHTTPConnection{Conn: conn}, nil
-}
-
-// Close 关闭底层连接
-func (c *AdbHTTPConnection) Close() error {
-	if c.Conn != nil {
-		return c.Conn.Close()
-	}
-	return nil
-}
-
-// sendRequest 将 HTTP 请求写入连接并读取响应
-// 通过原始 TCP 连接发送 HTTP 报文，避免依赖标准 http.Client
-func (c *AdbHTTPConnection) sendRequest(req *http.Request, timeout time.Duration) (*http.Response, error) {
-	// 设置读写截止时间
-	if timeout > 0 {
-		_ = c.Conn.SetDeadline(time.Now().Add(timeout))
-	} else {
-		_ = c.Conn.SetDeadline(time.Time{})
-	}
-
-	// 序列化 HTTP 请求为原始报文
-	var buf bytes.Buffer
-
-	// 请求行：METHOD PATH HTTP/1.1
-	path := req.URL.RequestURI()
-	if path == "" {
-		path = "/"
-	}
-	fmt.Fprintf(&buf, "%s %s HTTP/1.1\r\n", req.Method, path)
-	fmt.Fprintf(&buf, "Host: localhost\r\n")
-
-	// 设置默认请求头
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", "uiautomator2")
-	}
-	if req.Header.Get("Accept-Encoding") == "" {
-		req.Header.Set("Accept-Encoding", "")
-	}
-	if req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	// 写入请求头
-	for k, vals := range req.Header {
-		for _, v := range vals {
-			fmt.Fprintf(&buf, "%s: %s\r\n", k, v)
-		}
-	}
-
-	// 处理请求体
-	var bodyBytes []byte
-	if req.Body != nil {
-		var err error
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			return nil, fmt.Errorf("读取请求体失败: %w", err)
-		}
-		fmt.Fprintf(&buf, "Content-Length: %d\r\n", len(bodyBytes))
-	} else {
-		fmt.Fprintf(&buf, "Content-Length: 0\r\n")
-	}
-
-	// 请求头与请求体之间的空行
-	buf.WriteString("\r\n")
-
-	// 发送请求头
-	if _, err := c.Conn.Write(buf.Bytes()); err != nil {
-		return nil, fmt.Errorf("发送请求头失败: %w", err)
-	}
-	// 发送请求体
-	if len(bodyBytes) > 0 {
-		if _, err := c.Conn.Write(bodyBytes); err != nil {
-			return nil, fmt.Errorf("发送请求体失败: %w", err)
-		}
-	}
-
-	// 使用标准库解析 HTTP 响应
-	reader := bufio.NewReader(c.Conn)
-	resp, err := http.ReadResponse(reader, req)
-	if err != nil {
-		return nil, fmt.Errorf("读取 HTTP 响应失败: %w", err)
-	}
-	return resp, nil
-}
-
-// ---------- HttpRequest：高层 HTTP 请求封装 ----------
+// ---------- HttpRequest：通过标准 HTTP 客户端发送请求 ----------
 
 // HttpRequest 向设备端 UIAutomator2 服务发送 HTTP 请求
-// ctx 为上下文控制，dev 为设备接口，devicePort 为设备端服务端口
-// method 为 HTTP 方法，path 为请求路径
-// data 为请求体数据（会被 JSON 编码），timeoutSecs 为超时秒数
-// printRequest 为 true 时输出 curl 风格的调试信息
+// 使用 Go 标准 http.Client + 自定义 ADB 隧道 Dialer，与 Python uiautomator2 完全一致
+//
+// 工作原理（与 Python 的 AdbHTTPConnection 等价）：
+//  1. http.Transport 的 DialContext 会为每个请求建立一条新的 ADB 隧道
+//  2. 标准 http.Client 在这条隧道上发送完整的 HTTP/1.1 请求
+//  3. 请求完成后隧道自动关闭，无需额外清理
 func HttpRequest(ctx context.Context, dev AdbDevice, devicePort int, method, path string, data map[string]interface{}, timeoutSecs float64, printRequest bool) (*HTTPResponse, error) {
 	// 默认超时 10 秒
 	if timeoutSecs <= 0 {
 		timeoutSecs = 10.0
 	}
-	timeout := time.Duration(timeoutSecs * float64(time.Second))
 
 	// 调试模式：打印 curl 风格的请求信息
 	if printRequest {
 		now := time.Now().Format("15:04:05.000")
-		url := fmt.Sprintf("http://127.0.0.1:%d%s", devicePort, path)
+		url := fmt.Sprintf("http://<adb-tunnel>:%d%s", devicePort, path)
 		if data != nil {
 			b, _ := json.Marshal(data)
 			fmt.Printf("# HTTP 超时=%.3f\n%s $ curl -X %s %s -d '%s'\n", timeoutSecs, now, method, url, string(b))
@@ -177,7 +90,9 @@ func HttpRequest(ctx context.Context, dev AdbDevice, devicePort int, method, pat
 		}
 	}
 
-	// 构造 HTTP 请求
+	// 构造 HTTP 请求体
+	// URL 中的 host:port 会被自定义 DialContext 忽略，实际连接通过 ADB 隧道
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", devicePort, path)
 	var body io.Reader
 	if data != nil {
 		b, err := json.Marshal(data)
@@ -186,23 +101,27 @@ func HttpRequest(ctx context.Context, dev AdbDevice, devicePort int, method, pat
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, body)
+
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
 	}
-	req.Header.Set("User-Agent", "uiautomator2")
-	req.Header.Set("Accept-Encoding", "")
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	// 建立到设备的连接
-	connWrapper, err := NewAdbHTTPConnection(dev, devicePort, timeout)
-	if err != nil {
-		return nil, err
+	// 核心：自定义 Transport，用 ADB 隧道替代普通 TCP 连接
+	// 这与 Python 中 AdbHTTPConnection.connect() 重写 self.sock 的做法完全等价
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dev.CreateConnection("tcp", devicePort)
+		},
+		DisableKeepAlives: true, // 每次请求独立隧道，与 Python 行为一致
 	}
-	defer connWrapper.Close()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   time.Duration(timeoutSecs * float64(time.Second)),
+	}
 
-	// 发送请求并读取响应
-	resp, err := connWrapper.sendRequest(req, timeout)
+	resp, err := client.Do(req)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {

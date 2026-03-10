@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 )
 
 // FieldMeta 定义选择器字段的掩码位和默认值
@@ -198,20 +197,20 @@ func (s *Selector) Clone() *Selector {
 }
 
 // ToMap 将选择器序列化为 map，便于 JSON 编码或 RPC 调用
+// 始终包含 childOrSibling 和 childOrSiblingSelector 字段（即使为空），
+// 与 Python 版本保持一致，确保 UIAutomator2 服务端能正确解析
 func (s *Selector) ToMap() map[string]interface{} {
 	out := make(map[string]interface{}, len(s.fields)+3)
 	for k, v := range s.fields {
 		out[k] = v
 	}
 	out["mask"] = s.mask
-	if len(s.childOrSibling) > 0 {
-		out["childOrSibling"] = append([]string{}, s.childOrSibling...)
-		cs := make([]map[string]interface{}, 0, len(s.childOrSiblingSelector))
-		for _, c := range s.childOrSiblingSelector {
-			cs = append(cs, c.ToMap())
-		}
-		out["childOrSiblingSelector"] = cs
+	out["childOrSibling"] = append([]string{}, s.childOrSibling...)
+	cs := make([]map[string]interface{}, 0, len(s.childOrSiblingSelector))
+	for _, c := range s.childOrSiblingSelector {
+		cs = append(cs, c.ToMap())
 	}
+	out["childOrSiblingSelector"] = cs
 	return out
 }
 
@@ -304,48 +303,4 @@ func (s *Selector) String() string {
 	}
 	b, _ := json.Marshal(m)
 	return "Selector " + string(b)
-}
-
-// Example 使用示例（仅供参考，非单元测试）
-func Example() {
-	// 初始化根选择器
-	root := MustNew(map[string]interface{}{
-		"className": "android.widget.LinearLayout",
-	})
-
-	// 添加子元素选择器
-	root.Child(map[string]interface{}{
-		"text":     "下一步",
-		"instance": 0,
-	})
-
-	// 更新最后一个子选择器的 instance
-	_ = root.UpdateInstance(2)
-
-	// 深拷贝
-	cpy := root.Clone()
-
-	// 序列化为 JSON
-	j, _ := cpy.ToJSON()
-	fmt.Println(string(j))
-}
-
-// SimpleTests 简单测试函数（建议迁移到 _test.go 文件中使用 testing 包）
-func SimpleTests() {
-	// 设置与删除字段
-	s := MustNew(map[string]interface{}{"text": "hello"})
-	fmt.Println("设置后掩码:", strconv.FormatUint(uint64(s.Mask()), 10))
-	_ = s.Delete("text")
-	fmt.Println("删除后掩码:", strconv.FormatUint(uint64(s.Mask()), 10))
-
-	// 类型校验：bool 字段传入非 bool 值应报错
-	_, err := New(map[string]interface{}{"checkable": "yes"})
-	fmt.Println("非法 bool 值报错:", err != nil)
-
-	// 深拷贝独立性验证
-	s2 := MustNew(map[string]interface{}{"text": "a"})
-	s2.Child(map[string]interface{}{"text": "b", "instance": 1})
-	c := s2.Clone()
-	c.childOrSibling[0] = "sibling"
-	fmt.Println("原始 childOrSibling:", s2.childOrSibling[0], "克隆 childOrSibling:", c.childOrSibling[0])
 }

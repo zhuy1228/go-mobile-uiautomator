@@ -202,35 +202,71 @@ func ReadResponse(conn net.Conn, debug bool) (string, []byte, error) {
 	return st, nil, nil
 }
 
-// LaunchUiautomator 连接 ADB 服务器，路由到指定设备，启动 UIAutomator2 服务
-// 启动后持续将服务日志输出到标准输出
-// addr 为 ADB 服务器地址，serial 为设备序列号
-func LaunchUiautomator(addr, serial string) {
-	conn, err := DialADB(addr, 15*time.Second)
+// ConnectToDevice 建立到指定设备的 ADB 连接并完成路由
+// 返回已路由到目标设备的连接，调用者负责关闭
+// 这是一个便捷函数，封装了 DialADB + TransportTo 的常见组合
+func ConnectToDevice(addr, serial string, timeout time.Duration) (net.Conn, error) {
+	conn, err := DialADB(addr, timeout)
 	if err != nil {
-		fmt.Println("连接失败:", err)
-		return
+		return nil, fmt.Errorf("连接 ADB 服务器失败: %w", err)
 	}
-
-	// 路由到目标设备
 	if err := TransportTo(conn, serial); err != nil {
-		fmt.Println("设备路由失败:", err)
-		return
+		conn.Close()
+		return nil, fmt.Errorf("设备路由失败: %w", err)
 	}
+	return conn, nil
+}
 
-	// 启动 UIAutomator2 服务
-	cmd := "shell:CLASSPATH=/data/local/tmp/u2.jar app_process / com.wetest.uia2.Main"
-	if err := WriteAdbCmd(conn, cmd); err != nil {
-		fmt.Println("发送命令失败:", err)
-		return
+// PushFile 通过 ADB 推送本地文件到设备
+// 这是一个独立函数，不依赖 Device 实例，适合初始化阶段使用
+// addr 为 ADB 服务器地址，serial 为设备序列号
+// localPath 为本地文件路径，remotePath 为设备目标路径
+// mode 为文件权限（如 0644），debug 为 true 时输出调试信息
+func PushFile(addr, serial, localPath, remotePath string, mode int, debug bool) (int64, error) {
+	conn, err := ConnectToDevice(addr, serial, 15*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	s := InitSync(conn)
+	return s.SyncPushFile(localPath, remotePath, mode, debug)
+}
+
+// ---------- ADB 隧道（与 Python uiautomator2 完全一致） ----------
+
+// CreateTunnel 建立到设备指定端口的 ADB 隧道
+// 等同于 Python adbutils 的 device.create_connection(Network.TCP, port)
+//
+// 工作原理：
+//  1. 连接 ADB 服务器
+//  2. 通过 transport 选择目标设备
+//  3. 发送 tcp:<port> 命令建立隧道
+//  4. 返回的连接是一条直通设备端口的原始 TCP 管道
+//
+// 返回的连接由调用者负责关闭
+func CreateTunnel(addr, serial string, port int) (net.Conn, error) {
+	conn, err := DialADB(addr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("连接 ADB 服务器失败: %w", err)
+	}
+	if err := TransportTo(conn, serial); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("设备路由失败: %w", err)
+	}
+	if err := WriteAdbCmd(conn, fmt.Sprintf("tcp:%d", port)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("发送隧道命令失败: %w", err)
 	}
 	status, err := ReadStatus(conn)
 	if err != nil {
-		fmt.Println("读取状态失败:", err)
-		return
+		conn.Close()
+		return nil, fmt.Errorf("读取隧道状态失败: %w", err)
 	}
-	fmt.Println("UIAutomator2 启动状态:", status)
-
-	// 持续输出 UIAutomator2 服务日志
-	io.Copy(os.Stdout, conn)
+	if status != "OKAY" {
+		msg, _ := ReadLenFrame(conn)
+		conn.Close()
+		return nil, fmt.Errorf("ADB 隧道建立失败: %s %s", status, string(msg))
+	}
+	return conn, nil
 }
