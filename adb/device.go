@@ -2,23 +2,25 @@ package adb
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // DeviceInfo 包含从 ADB 服务器设备列表和设备端 getprop 收集到的设备信息
 type DeviceInfo struct {
-	Serial      string            // 设备序列号
-	State       string            // 设备状态（device/offline/unauthorized）
-	Product     string            // 产品名称
-	Model       string            // 设备型号
-	Device      string            // 设备代号
-	TransportID string            // ADB 传输 ID
-	Props       map[string]string // 额外属性
+	Serial      string            `json:"serial"`       // 设备序列号
+	State       string            `json:"state"`        // 设备状态（device/offline/unauthorized）
+	Product     string            `json:"product"`      // 产品名称
+	Model       string            `json:"model"`        // 设备型号
+	Device      string            `json:"device"`       // 设备代号
+	TransportID string            `json:"transport_id"` // ADB 传输 ID
+	Props       map[string]string `json:"props"`        // 额外属性
 }
 
 // ListDevicesRaw 向 ADB 服务器请求设备列表并返回原始文本
@@ -220,4 +222,112 @@ func InstallApkOnDevice(addr, serial string, remoteTmp string, pmArgs string, de
 		return outStr, nil
 	}
 	return outStr, fmt.Errorf("安装失败: %s", outStr)
+}
+
+// TrackDevicesEvent 表示 host:track-devices 的一条事件。
+// - Err == nil：Payload 为一次流更新（ADB 一帧设备列表原文，可能为空字符串）；
+// - Err != nil：连接建立失败、协议错误、读写异常或 ctx 取消，收到后应结束消费。
+type TrackDevicesEvent struct {
+	Payload string
+	Err     error
+}
+
+// TrackDevices 使用 host:track-devices 持续跟踪设备变化。
+// ctx 取消时会关闭底层连接并发送 Err 为 ctx.Err() 的事件（若缓冲未满），随后关闭通道。
+// timeout 仅用于拨号到 ADB 服务器。
+func TrackDevices(ctx context.Context, addr string, timeout time.Duration) <-chan TrackDevicesEvent {
+	ch := make(chan TrackDevicesEvent, 8)
+
+	sendEvent := func(ev TrackDevicesEvent) {
+		select {
+		case ch <- ev:
+		case <-ctx.Done():
+		}
+	}
+
+	go func() {
+		defer close(ch)
+
+		if ctx.Err() != nil {
+			sendEvent(TrackDevicesEvent{Err: ctx.Err()})
+			return
+		}
+
+		conn, err := DialADB(addr, timeout)
+		if err != nil {
+			sendEvent(TrackDevicesEvent{Err: err})
+			return
+		}
+		defer conn.Close()
+
+		stopClose := make(chan struct{})
+		defer close(stopClose)
+		go func() {
+			select {
+			case <-ctx.Done():
+				conn.Close()
+			case <-stopClose:
+			}
+		}()
+
+		if err := WriteAdbCmd(conn, "host:track-devices"); err != nil {
+			sendEvent(TrackDevicesEvent{Err: err})
+			return
+		}
+		status, err := ReadStatus(conn)
+		if err != nil {
+			sendEvent(TrackDevicesEvent{Err: err})
+			return
+		}
+		if status == "FAIL" {
+			msg, _ := ReadLenFrame(conn)
+			sendEvent(TrackDevicesEvent{Err: fmt.Errorf("ADB 返回失败: %s", string(msg))})
+			return
+		}
+		if status != "OKAY" {
+			sendEvent(TrackDevicesEvent{Err: fmt.Errorf("意外的状态码: %s", status)})
+			return
+		}
+
+		for {
+			hdr := make([]byte, 4)
+			if _, err := io.ReadFull(conn, hdr); err != nil {
+				if ctx.Err() != nil {
+					sendEvent(TrackDevicesEvent{Err: ctx.Err()})
+					return
+				}
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					return
+				}
+				sendEvent(TrackDevicesEvent{Err: err})
+				return
+			}
+			n, err := strconv.ParseInt(string(hdr), 16, 32)
+			if err != nil {
+				sendEvent(TrackDevicesEvent{Err: fmt.Errorf("解析 track-devices 帧长度失败: %w", err)})
+				return
+			}
+
+			if n == 0 {
+				sendEvent(TrackDevicesEvent{Payload: ""})
+				continue
+			}
+
+			payload := make([]byte, int(n))
+			if _, err := io.ReadFull(conn, payload); err != nil {
+				if ctx.Err() != nil {
+					sendEvent(TrackDevicesEvent{Err: ctx.Err()})
+					return
+				}
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					return
+				}
+				sendEvent(TrackDevicesEvent{Err: err})
+				return
+			}
+			sendEvent(TrackDevicesEvent{Payload: string(payload)})
+		}
+	}()
+
+	return ch
 }

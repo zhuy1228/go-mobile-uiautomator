@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -15,7 +16,20 @@ const (
 )
 
 func main() {
-	launchUiautomator()
+	// launchUiautomator()
+	ctx := context.Background()
+	go func() {
+		for ev := range adb.TrackDevices(ctx, libs.DefaultADBAddr, 15*time.Second) {
+			if ev.Err != nil {
+				fmt.Println("track-devices 结束:", ev.Err)
+				return
+			}
+			if ev.Payload == "" {
+				continue
+			}
+			fmt.Println(ev.Payload)
+		}
+	}()
 }
 
 // launchUiautomator 推送服务文件并启动 UIAutomator2
