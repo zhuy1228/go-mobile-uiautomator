@@ -28,8 +28,23 @@ func main() {
 				continue
 			}
 			fmt.Println(ev.Payload)
+			info, err := adb.GetProp(libs.DefaultADBAddr, serial)
+			if err != nil {
+				fmt.Println("getprop 失败:", err)
+				return
+			}
+			fmt.Println("Android版本:", info["ro.build.version.release"])
+			fmt.Println("设备型号:", info["ro.product.model"])
+			fmt.Println("设备代号:", info["ro.product.device"])
+			fmt.Println("设备品牌:", info["ro.product.brand"])
+			fmt.Println("设备架构:", info["ro.product.cpu.abi"])
+			fmt.Println("设备序列号:", info["ro.serialno"])
+			fmt.Println("设备SDK:", info["ro.build.version.sdk"])
+			fmt.Println("设备品牌:", info["ro.product.brand"])
+
 		}
 	}()
+	select {}
 }
 
 // launchUiautomator 推送服务文件并启动 UIAutomator2

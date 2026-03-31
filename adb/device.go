@@ -331,3 +331,17 @@ func TrackDevices(ctx context.Context, addr string, timeout time.Duration) <-cha
 
 	return ch
 }
+
+// getprop 命令获取设备信息
+func GetProp(addr, serial string) (map[string]string, error) {
+	conn, err := ConnectToDevice(addr, serial, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	out, err := ExecShell(conn, "getprop")
+	if err != nil {
+		return nil, err
+	}
+	return parseGetprop(out), nil
+}
